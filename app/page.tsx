@@ -126,7 +126,7 @@ export default function Page() {
                   className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="e.g. מסעדות, חנות, מרפאה…"
+                  placeholder="e.g. مستشفى..."
               />
 
               <div className="mt-3">
