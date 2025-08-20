@@ -12,7 +12,6 @@ type PlaceRow = {
   user_ratings_total: number | null;
   types: string[];
   business_status: string | null;
-  icon: string | null;
 };
 
 const DEFAULT_CENTER = { lat: 31.771959, lng: 35.217018 }; // Jerusalem-ish
@@ -20,54 +19,64 @@ const DEFAULT_CENTER = { lat: 31.771959, lng: 35.217018 }; // Jerusalem-ish
 export default function Page() {
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined;
   const defaultLang = (process.env.NEXT_PUBLIC_DEFAULT_LANGUAGE as string) || 'he';
-  const defaultRegion = (process.env.NEXT_PUBLIC_DEFAULT_REGION as string) || 'IL';
 
   const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
     googleMapsApiKey: apiKey || '',
     libraries: ['places'],
     language: defaultLang,
-    region: defaultRegion,
   });
 
   const [query, setQuery] = useState('');
   const [language, setLanguage] = useState(defaultLang);
-  const [region, setRegion] = useState(defaultRegion);
-
   const [rows, setRows] = useState<PlaceRow[]>([]);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const mapRef = useRef<google.maps.Map | null>(null);
   const [active, setActive] = useState<PlaceRow | null>(null);
 
-  const onMapLoad = (map: google.maps.Map) => {
-    mapRef.current = map;
-    if (rows.length) fitToMarkers(map, rows);
-  };
+  const mapRef = useRef<google.maps.Map | null>(null);
 
-  useEffect(() => {
-    if (isLoaded && mapRef.current && rows.length) fitToMarkers(mapRef.current, rows);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, rows.length]);
+  function onMapLoad(map: google.maps.Map) {
+    mapRef.current = map;
+  }
+
+  function getBounds() {
+    const map = mapRef.current;
+    if (!map) return null;
+    const b = map.getBounds();
+    if (!b) return null;
+    const ne = b.getNorthEast();
+    const sw = b.getSouthWest();
+    return {
+      north: ne.lat(),
+      east: ne.lng(),
+      south: sw.lat(),
+      west: sw.lng(),
+    };
+  }
 
   async function search(firstPage = true) {
     if (!apiKey) {
       setError('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local');
       return;
     }
+    const bounds = getBounds();
+    if (!bounds) {
+      setError('Pan/zoom the map so bounds exist, then search.');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const url = new URL('/api/places', window.location.origin);
-      if (firstPage) {
-        url.searchParams.set('query', query);
-      } else if (nextPageToken) {
-        url.searchParams.set('pagetoken', nextPageToken);
-      }
+      url.searchParams.set('q', query);
+      url.searchParams.set('north', String(bounds.north));
+      url.searchParams.set('south', String(bounds.south));
+      url.searchParams.set('east', String(bounds.east));
+      url.searchParams.set('west', String(bounds.west));
       url.searchParams.set('language', language);
-      url.searchParams.set('region', region);
+      if (!firstPage && nextPageToken) url.searchParams.set('pageToken', nextPageToken);
 
       const res = await fetch(url.toString());
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -76,13 +85,13 @@ export default function Page() {
       setNextPageToken(data.next_page_token || null);
       setRows((prev) => (firstPage ? data.results : [...prev, ...data.results]));
 
-      // Fit map after state updates
-      setTimeout(() => {
-        if (mapRef.current) {
-          const merged = firstPage ? data.results : [...rows, ...data.results];
-          fitToMarkers(mapRef.current!, merged);
-        }
-      }, 0);
+      if (firstPage) {
+        setTimeout(() => {
+          const map = mapRef.current;
+          if (!map) return;
+          fitToMarkers(map, data.results);
+        }, 0);
+      }
     } catch (e: any) {
       setError(e.message || 'Search failed');
     } finally {
@@ -90,15 +99,16 @@ export default function Page() {
     }
   }
 
-  function exportCsv(onlyInView: boolean) {
-    const data = onlyInView && mapRef.current ? filterByBounds(rows, mapRef.current) : rows;
+  function exportCsvVisible() {
+    const map = mapRef.current;
+    if (!map) return;
+    const data = filterByBounds(rows, map);
     const csv = buildCsv(data);
-    // Add UTF-8 BOM to help Excel/Hebrew users
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }); // BOM for Hebrew/Excel
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `places_${new Date().toISOString().slice(0, 19)}.csv`;
+    a.download = `places_in_view_${new Date().toISOString().slice(0, 19)}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -107,9 +117,9 @@ export default function Page() {
 
   return (
       <main className="mx-auto max-w-7xl p-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Map → CSV</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Free-text search (Google Places), plot on the map, export current results or only what’s in view.
+        <h1 className="text-2xl font-semibold">Map → CSV (visible area only)</h1>
+        <p className="text-sm text-slate-600 mt-1">
+          Type a phrase, we search <strong>inside the current map view</strong>, then export exactly what you see.
         </p>
 
         <section className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
@@ -121,28 +131,18 @@ export default function Page() {
                   className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="e.g. מסעדות כשרות בתל אביב"
+                  placeholder="e.g. מסעדות, חנות, מרפאה…"
               />
 
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600">Language</label>
-                  <input
-                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                      value={language}
-                      onChange={(e) => setLanguage(e.target.value)}
-                      placeholder="he, en, ar, ..."
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600">Region</label>
-                  <input
-                      className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-                      value={region}
-                      onChange={(e) => setRegion(e.target.value)}
-                      placeholder="IL, US, ..."
-                  />
-                </div>
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-slate-600">Output language</label>
+                <input
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    placeholder="he, en, ar, ..."
+                    title="Controls localization of returned text when available. It does not translate your query."
+                />
               </div>
 
               <div className="mt-3 flex items-center gap-3">
@@ -150,14 +150,15 @@ export default function Page() {
                     className="rounded-xl bg-blue-600 px-4 py-2 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                     onClick={() => search(true)}
                     disabled={loading || !query.trim()}
+                    title="Search inside the current map view"
                 >
-                  {loading ? 'Searching…' : 'Search'}
+                  {loading ? 'Searching…' : 'Search in view'}
                 </button>
                 <button
                     className="rounded-xl border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                     onClick={() => search(false)}
                     disabled={loading || !nextPageToken}
-                    title="Load more results (if available)"
+                    title="Load more results (same view)"
                 >
                   Load more
                 </button>
@@ -168,24 +169,14 @@ export default function Page() {
 
             <div className="rounded-2xl border border-slate-200 p-4 shadow-sm">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Results ({rows.length})</h2>
-                <div className="flex gap-2">
-                  <button
-                      className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      onClick={() => exportCsv(false)}
-                      disabled={!rows.length}
-                  >
-                    Export CSV (list)
-                  </button>
-                  <button
-                      className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      onClick={() => exportCsv(true)}
-                      disabled={!rows.length || !mapRef.current}
-                      title="Export only places currently within the map bounds"
-                  >
-                    Export CSV (in view)
-                  </button>
-                </div>
+                <h2 className="text-sm font-semibold">Results in view ({rows.length})</h2>
+                <button
+                    className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    onClick={exportCsvVisible}
+                    disabled={!rows.length || !mapRef.current}
+                >
+                  Export CSV (in view)
+                </button>
               </div>
 
               <div className="mt-3 max-h-[380px] overflow-auto rounded-xl border border-slate-100">
@@ -212,7 +203,7 @@ export default function Page() {
                   {!rows.length && (
                       <tr>
                         <td className="px-3 py-4 text-slate-500" colSpan={3}>
-                          No results yet — try a search.
+                          No results yet — try a local-language term (e.g. “hospital”, “مستشفى”).
                         </td>
                       </tr>
                   )}
@@ -231,7 +222,7 @@ export default function Page() {
                     onLoad={onMapLoad}
                     mapContainerStyle={{ width: '100%', height: '520px', borderRadius: '1rem' }}
                     center={DEFAULT_CENTER}
-                    zoom={10}
+                    zoom={12}
                     options={{ mapTypeControl: false, streetViewControl: false, fullscreenControl: false }}
                 >
                   {rows.map((r) =>
@@ -264,12 +255,6 @@ export default function Page() {
             )}
           </div>
         </section>
-
-        <footer className="mt-8 text-xs text-slate-500">
-          <p>
-            In Google Cloud, enable <strong>Maps JavaScript API</strong> and <strong>Places API</strong>.
-          </p>
-        </footer>
       </main>
   );
 }
