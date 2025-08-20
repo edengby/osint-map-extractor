@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleMap, Marker, InfoWindow, useJsApiLoader } from '@react-google-maps/api';
+import GuideModal from '@/components/GuideModal'; // ← NEW
 
 type PlaceRow = {
   name: string;
@@ -40,9 +41,7 @@ export default function Page() {
 
   const mapRef = useRef<google.maps.Map | null>(null);
 
-  function onMapLoad(map: google.maps.Map) {
-    mapRef.current = map;
-  }
+  function onMapLoad(map: google.maps.Map) { mapRef.current = map; }
 
   function getBounds() {
     const map = mapRef.current;
@@ -51,26 +50,14 @@ export default function Page() {
     if (!b) return null;
     const ne = b.getNorthEast();
     const sw = b.getSouthWest();
-    return {
-      north: ne.lat(),
-      east: ne.lng(),
-      south: sw.lat(),
-      west: sw.lng(),
-    };
+    return { north: ne.lat(), east: ne.lng(), south: sw.lat(), west: sw.lng() };
   }
 
   async function search(firstPage = true) {
-    if (!apiKey) {
-      setError('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local');
-      return;
-    }
+    if (!apiKey) { setError('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local'); return; }
     const bounds = getBounds();
-    if (!bounds) {
-      setError('Pan/zoom the map so bounds exist, then search.');
-      return;
-    }
-    setLoading(true);
-    setError(null);
+    if (!bounds) { setError('Pan/zoom the map so bounds exist, then search.'); return; }
+    setLoading(true); setError(null);
     try {
       const url = new URL('/api/places', window.location.origin);
       url.searchParams.set('q', query);
@@ -114,7 +101,7 @@ export default function Page() {
       <main className="mx-auto max-w-7xl p-6">
         <h1 className="text-2xl font-semibold">Map → CSV (visible area only)</h1>
         <p className="text-sm text-slate-600 mt-1">
-          Search in the current map view and export exactly what you see (now with website & phone).
+          Search in the current map view and export exactly what you see.
         </p>
 
         <section className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
@@ -126,26 +113,23 @@ export default function Page() {
                   className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="e.g. مستشفى..."
+                  placeholder="e.g. مطعم، مستشفى، مخبز…"
               />
-
               <div className="mt-3">
                 <label className="block text-xs font-medium text-slate-600">Output language</label>
                 <input
                     className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
                     value={language}
                     onChange={(e) => setLanguage(e.target.value)}
-                    placeholder="he, en, ar, ..."
+                    placeholder="ar, he, en, ..."
                     title="Controls localization of returned text when available. It does not translate your query."
                 />
               </div>
-
               <div className="mt-3 flex items-center gap-3">
                 <button
                     className="rounded-xl bg-blue-600 px-4 py-2 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                     onClick={() => search(true)}
                     disabled={loading || !query.trim()}
-                    title="Search inside the current map view"
                 >
                   {loading ? 'Searching…' : 'Search in view'}
                 </button>
@@ -153,12 +137,10 @@ export default function Page() {
                     className="rounded-xl border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                     onClick={() => search(false)}
                     disabled={loading || !nextPageToken}
-                    title="Load more results (same view)"
                 >
                   Load more
                 </button>
               </div>
-
               {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
             </div>
 
@@ -173,7 +155,6 @@ export default function Page() {
                   Export CSV (in view)
                 </button>
               </div>
-
               <div className="mt-3 max-h-[380px] overflow-auto rounded-xl border border-slate-100">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-slate-50 text-slate-700">
@@ -185,11 +166,7 @@ export default function Page() {
                   </thead>
                   <tbody>
                   {rows.map((r) => (
-                      <tr
-                          key={r.place_id}
-                          className="odd:bg-white even:bg-slate-50 cursor-pointer"
-                          onClick={() => setActive(r)}
-                      >
+                      <tr key={r.place_id} className="odd:bg-white even:bg-slate-50 cursor-pointer" onClick={() => setActive(r)}>
                         <td className="px-3 py-2 font-medium">{r.name}</td>
                         <td className="px-3 py-2 text-slate-600">{r.formatted_address}</td>
                         <td className="px-3 py-2">{r.rating ?? '—'}</td>
@@ -198,7 +175,7 @@ export default function Page() {
                   {!rows.length && (
                       <tr>
                         <td className="px-3 py-4 text-slate-500" colSpan={3}>
-                          No results yet — try a local-language term (e.g. “hospital”, “مستشفى”).
+                          No results yet — try a local-language term (e.g. “مستشفى”).
                         </td>
                       </tr>
                   )}
@@ -222,20 +199,12 @@ export default function Page() {
                 >
                   {rows.map((r) =>
                       r.location.lat != null && r.location.lng != null ? (
-                          <Marker
-                              key={r.place_id}
-                              position={{ lat: r.location.lat, lng: r.location.lng }}
-                              onClick={() => setActive(r)}
-                              title={r.name}
-                          />
+                          <Marker key={r.place_id} position={{ lat: r.location.lat, lng: r.location.lng }} onClick={() => setActive(r)} title={r.name} />
                       ) : null
                   )}
 
                   {active && active.location.lat != null && active.location.lng != null && (
-                      <InfoWindow
-                          position={{ lat: active.location.lat, lng: active.location.lng }}
-                          onCloseClick={() => setActive(null)}
-                      >
+                      <InfoWindow position={{ lat: active.location.lat, lng: active.location.lng }} onCloseClick={() => setActive(null)}>
                         <div className="text-sm">
                           <div className="font-semibold">{active.name}</div>
                           <div className="text-slate-600">{active.formatted_address}</div>
@@ -244,12 +213,7 @@ export default function Page() {
                           </div>
                           {active.website && (
                               <div className="mt-1">
-                                <a
-                                    href={active.website}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-blue-600 underline break-all"
-                                >
+                                <a href={active.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline break-all">
                                   Website
                                 </a>
                               </div>
@@ -268,6 +232,9 @@ export default function Page() {
             )}
           </div>
         </section>
+
+        {/* ← NEW: Arabic guide popup */}
+        <GuideModal />
       </main>
   );
 }
@@ -285,43 +252,13 @@ function buildCsv(rows: PlaceRow[]): string {
   const esc = (v: any) => {
     if (v == null) return '';
     const s = String(v);
-    if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-      return '"' + s.replaceAll('"', '""') + '"';
-    }
+    if (s.includes('"') || s.includes(',') || s.includes('\n')) return '"' + s.replaceAll('"', '""') + '"';
     return s;
   };
-  const header = [
-    'name',
-    'address',
-    'lat',
-    'lng',
-    'place_id',
-    'rating',
-    'user_ratings_total',
-    'types',
-    'business_status',
-    'website',
-    'phone',
-    'google_maps_url',
-  ];
+  const header = ['name','address','lat','lng','place_id','rating','user_ratings_total','types','business_status','website','phone','google_maps_url'];
   const lines = [header.join(',')];
   for (const r of rows) {
-    lines.push(
-        [
-          esc(r.name),
-          esc(r.formatted_address),
-          esc(r.location.lat ?? ''),
-          esc(r.location.lng ?? ''),
-          esc(r.place_id),
-          esc(r.rating ?? ''),
-          esc(r.user_ratings_total ?? ''),
-          esc(r.types?.join('|') ?? ''),
-          esc(r.business_status ?? ''),
-          esc(r.website ?? ''),
-          esc(r.phone ?? ''),
-          esc(r.googleMapsUri ?? ''),
-        ].join(',')
-    );
+    lines.push([esc(r.name),esc(r.formatted_address),esc(r.location.lat ?? ''),esc(r.location.lng ?? ''),esc(r.place_id),esc(r.rating ?? ''),esc(r.user_ratings_total ?? ''),esc((r.types || []).join('|')),esc(r.business_status ?? ''),esc(r.website ?? ''),esc(r.phone ?? ''),esc(r.googleMapsUri ?? ''),].join(','));
   }
   return lines.join('\n');
 }
