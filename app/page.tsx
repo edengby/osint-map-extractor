@@ -12,9 +12,12 @@ type PlaceRow = {
   user_ratings_total: number | null;
   types: string[];
   business_status: string | null;
+  website: string | null;
+  phone: string | null;
+  googleMapsUri: string | null;
 };
 
-const DEFAULT_CENTER = { lat: 31.771959, lng: 35.217018 }; // Jerusalem-ish
+const DEFAULT_CENTER = { lat: 31.771959, lng: 35.217018 };
 
 export default function Page() {
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -84,14 +87,6 @@ export default function Page() {
 
       setNextPageToken(data.next_page_token || null);
       setRows((prev) => (firstPage ? data.results : [...prev, ...data.results]));
-
-      if (firstPage) {
-        setTimeout(() => {
-          const map = mapRef.current;
-          if (!map) return;
-          fitToMarkers(map, data.results);
-        }, 0);
-      }
     } catch (e: any) {
       setError(e.message || 'Search failed');
     } finally {
@@ -104,7 +99,7 @@ export default function Page() {
     if (!map) return;
     const data = filterByBounds(rows, map);
     const csv = buildCsv(data);
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }); // BOM for Hebrew/Excel
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -119,7 +114,7 @@ export default function Page() {
       <main className="mx-auto max-w-7xl p-6">
         <h1 className="text-2xl font-semibold">Map → CSV (visible area only)</h1>
         <p className="text-sm text-slate-600 mt-1">
-          Type a phrase, we search <strong>inside the current map view</strong>, then export exactly what you see.
+          Search in the current map view and export exactly what you see (now with website & phone).
         </p>
 
         <section className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
@@ -247,7 +242,25 @@ export default function Page() {
                           <div className="mt-1 text-slate-600">
                             ⭐ {active.rating ?? '—'} ({active.user_ratings_total ?? 0})
                           </div>
-                          <div className="mt-1 text-xs text-slate-500 break-all">{active.place_id}</div>
+                          {active.website && (
+                              <div className="mt-1">
+                                <a
+                                    href={active.website}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 underline break-all"
+                                >
+                                  Website
+                                </a>
+                              </div>
+                          )}
+                          {active.phone && (
+                              <div className="mt-1">
+                                <a href={`tel:${active.phone}`} className="text-blue-600 underline">
+                                  {active.phone}
+                                </a>
+                              </div>
+                          )}
                         </div>
                       </InfoWindow>
                   )}
@@ -257,18 +270,6 @@ export default function Page() {
         </section>
       </main>
   );
-}
-
-function fitToMarkers(map: google.maps.Map, rows: PlaceRow[]) {
-  const bounds = new google.maps.LatLngBounds();
-  let count = 0;
-  for (const r of rows) {
-    if (r.location.lat != null && r.location.lng != null) {
-      bounds.extend(new google.maps.LatLng(r.location.lat, r.location.lng));
-      count++;
-    }
-  }
-  if (count > 0) map.fitBounds(bounds, 48);
 }
 
 function filterByBounds(rows: PlaceRow[], map: google.maps.Map): PlaceRow[] {
@@ -299,6 +300,9 @@ function buildCsv(rows: PlaceRow[]): string {
     'user_ratings_total',
     'types',
     'business_status',
+    'website',
+    'phone',
+    'google_maps_url',
   ];
   const lines = [header.join(',')];
   for (const r of rows) {
@@ -313,6 +317,9 @@ function buildCsv(rows: PlaceRow[]): string {
           esc(r.user_ratings_total ?? ''),
           esc(r.types?.join('|') ?? ''),
           esc(r.business_status ?? ''),
+          esc(r.website ?? ''),
+          esc(r.phone ?? ''),
+          esc(r.googleMapsUri ?? ''),
         ].join(',')
     );
   }

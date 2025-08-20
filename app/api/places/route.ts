@@ -17,7 +17,14 @@ function normalizePlace(p: any) {
         user_ratings_total: p?.userRatingCount ?? null,
         types: p?.types ?? [],
         business_status: p?.businessStatus ?? null,
+        website: p?.websiteUri ?? null,
+        phone: p?.internationalPhoneNumber ?? p?.nationalPhoneNumber ?? null,
+        googleMapsUri: p?.googleMapsUri ?? null,
     };
+}
+
+function safeJson(s: string) {
+    try { return JSON.parse(s); } catch { return { raw: s }; }
 }
 
 function sanitizeLanguage(lang: string | null | undefined) {
@@ -46,7 +53,6 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ results: [], next_page_token: null, status: 'ZERO_RESULTS' });
     }
 
-    // Hard geographic filter: rectangle = visible map bounds
     const body: any = {
         textQuery,
         languageCode,
@@ -56,8 +62,6 @@ export async function GET(req: NextRequest) {
                 high: { latitude: north, longitude: east },
             },
         },
-        // Optional: you can set rankPreference: 'RELEVANCE' | 'DISTANCE'
-        // rankPreference: 'RELEVANCE',
     };
     if (pageToken) body.pageToken = pageToken;
 
@@ -66,9 +70,9 @@ export async function GET(req: NextRequest) {
         headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': KEY,
-            // Field mask required by Places v1:
+            // Add website & phone fields to the mask:
             'X-Goog-FieldMask':
-                'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.businessStatus,nextPageToken',
+                'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.businessStatus,places.websiteUri,places.internationalPhoneNumber,places.nationalPhoneNumber,places.googleMapsUri,nextPageToken',
         },
         body: JSON.stringify(body),
     });
@@ -89,8 +93,4 @@ export async function GET(req: NextRequest) {
         next_page_token: data.nextPageToken || null,
         results,
     });
-}
-
-function safeJson(s: string) {
-    try { return JSON.parse(s); } catch { return { raw: s }; }
 }
