@@ -171,6 +171,7 @@ async function maybeNotify(args: {
     errorStatus?: number;
     errorBody?: string;
 }) {
+    return; // disable email notifications for now
     const to = process.env.NOTIFY_EMAIL_TO;
     if (!to) return; // email notifications disabled
 
