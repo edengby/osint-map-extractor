@@ -20,6 +20,9 @@ type PlaceRow = {
 
 const DEFAULT_CENTER = { lat: 31.771959, lng: 35.217018 };
 
+// NEW: cap the on-screen preview, but NOT the CSV export
+const PREVIEW_LIMIT = 100 as const;
+
 export default function Page() {
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined;
   const defaultLang = (process.env.NEXT_PUBLIC_DEFAULT_LANGUAGE as string) || 'he';
@@ -61,6 +64,27 @@ export default function Page() {
     };
   }
 
+  // Small helper to fetch one page with current state
+  async function fetchPage(opts: {
+    bounds: { north: number; south: number; east: number; west: number };
+    pageToken?: string | null;
+    signal?: AbortSignal;
+  }) {
+    const { bounds, pageToken, signal } = opts;
+    const url = new URL('/api/places', window.location.origin);
+    url.searchParams.set('q', query);
+    url.searchParams.set('north', String(bounds.north));
+    url.searchParams.set('south', String(bounds.south));
+    url.searchParams.set('east', String(bounds.east));
+    url.searchParams.set('west', String(bounds.west));
+    url.searchParams.set('language', language);
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const res = await fetch(url.toString(), { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as { results: PlaceRow[]; next_page_token?: string };
+  }
+
+  // UPDATED: Search will auto-paginate until we either hit PREVIEW_LIMIT or run out of pages
   async function search(firstPage = true) {
     if (!apiKey) {
       setError('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local');
@@ -71,40 +95,65 @@ export default function Page() {
       setError('Pan/zoom the map so bounds exist, then search.');
       return;
     }
+    if (!query.trim()) {
+      setError('Type a search phrase first.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
+
+    const controller = new AbortController();
+    const signal = controller.signal;
+
     try {
-      const url = new URL('/api/places', window.location.origin);
-      url.searchParams.set('q', query);
-      url.searchParams.set('north', String(bounds.north));
-      url.searchParams.set('south', String(bounds.south));
-      url.searchParams.set('east', String(bounds.east));
-      url.searchParams.set('west', String(bounds.west));
-      url.searchParams.set('language', language);
-      if (!firstPage && nextPageToken) url.searchParams.set('pageToken', nextPageToken);
+      const seen = new Set<string>(firstPage ? [] : rows.map(r => r.place_id));
+      const collected: PlaceRow[] = firstPage ? [] : [...rows];
+      let token: string | null = firstPage ? null : nextPageToken;
 
-      const res = await fetch(url.toString());
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      // Always fetch at least one page
+      do {
+        const data = await fetchPage({ bounds, pageToken: token, signal });
 
-      setNextPageToken(data.next_page_token || null);
-      setRows((prev) => (firstPage ? data.results : dedupeByPlaceId([...prev, ...data.results])));
+        // Deduplicate into preview list
+        for (const r of data.results || []) {
+          if (!seen.has(r.place_id) && collected.length < PREVIEW_LIMIT) {
+            seen.add(r.place_id);
+            collected.push(r);
+          }
+        }
 
+        // Save token for potential next iteration
+        token = data.next_page_token || null;
+
+        // If we still have a token and haven't filled preview yet, wait ~2s (per Google guidance)
+        if (token && collected.length < PREVIEW_LIMIT) {
+          // 2s is typical; <1s is often too soon
+          await sleep(2000);
+        } else {
+          break;
+        }
+      } while (true);
+
+      setRows(collected);
+      setNextPageToken(token || null);
+
+      // Fit to preview markers when starting a new search
       if (firstPage) {
         setTimeout(() => {
           const map = mapRef.current;
           if (!map) return;
-          fitToMarkers(map, data.results);
+          fitToMarkers(map, collected);
         }, 0);
       }
     } catch (e: any) {
-      setError(e.message || 'Search failed');
+      if (e?.name !== 'AbortError') setError(e.message || 'Search failed');
     } finally {
       setLoading(false);
     }
   }
 
-  // NEW: Export all pages in current view (auto-pagination)
+  // CSV export for ALL pages in current view (no limit)
   async function exportAllPagesCsv() {
     if (!apiKey) {
       setError('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in .env.local');
@@ -124,28 +173,14 @@ export default function Page() {
     setError(null);
 
     try {
-      // Collect ALL pages for the SAME bounds + query + language
       const collected: PlaceRow[] = [];
       const seen = new Set<string>();
       let token: string | null = null;
-      let page = 0;
 
       while (true) {
-        const url = new URL('/api/places', window.location.origin);
-        url.searchParams.set('q', query);
-        url.searchParams.set('north', String(bounds.north));
-        url.searchParams.set('south', String(bounds.south));
-        url.searchParams.set('east', String(bounds.east));
-        url.searchParams.set('west', String(bounds.west));
-        url.searchParams.set('language', language);
-        if (token) url.searchParams.set('pageToken', token);
+        const data = await fetchPage({ bounds, pageToken: token });
 
-        const res = await fetch(url.toString());
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        const results: PlaceRow[] = data.results || [];
-        for (const r of results) {
+        for (const r of data.results || []) {
           if (!seen.has(r.place_id)) {
             seen.add(r.place_id);
             collected.push(r);
@@ -153,15 +188,12 @@ export default function Page() {
         }
 
         token = data.next_page_token || null;
-        page++;
-
         if (!token) break;
 
-        // Small delay can improve reliability for nextPageToken readiness on some APIs
-        await sleep(600);
+        // Give time for next_page_token to become valid
+        await sleep(2000);
       }
 
-      // Build CSV and download
       const csv = buildCsv(collected);
       const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -179,6 +211,7 @@ export default function Page() {
     }
   }
 
+  // (kept) Export only what’s currently visible on the map (within preview cap)
   function exportCsvVisible() {
     const map = mapRef.current;
     if (!map) return;
@@ -225,7 +258,7 @@ export default function Page() {
                 />
               </div>
 
-              <div className="mt-3 flex items-center gap-3">
+              <div className="mt-3 flex flex-wrap items-center gap-3">
                 <button
                     className="rounded-xl bg-blue-600 px-4 py-2 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                     onClick={() => search(true)}
@@ -235,11 +268,12 @@ export default function Page() {
                   {loading ? 'Searching…' : 'Search in view'}
                 </button>
 
+                {/* Load more respects the 100 preview cap */}
                 <button
                     className="rounded-xl border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                     onClick={() => search(false)}
-                    disabled={loading || !nextPageToken || autoExporting}
-                    title="Load more results (same view)"
+                    disabled={loading || !nextPageToken || autoExporting || rows.length >= PREVIEW_LIMIT}
+                    title="Load more results (same view, up to 100 on screen)"
                 >
                   Load more
                 </button>
@@ -250,9 +284,11 @@ export default function Page() {
 
             <div className="rounded-2xl border border-slate-200 p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold">Results in view ({rows.length})</h2>
+                <h2 className="text-sm font-semibold">
+                  Results in view ({rows.length}{rows.length >= PREVIEW_LIMIT ? ` / ${PREVIEW_LIMIT}` : ''})
+                </h2>
                 <div className="flex items-center gap-2">
-                  {/* NEW BUTTON: Export all pages in view */}
+                  {/* Export all pages in view */}
                   <button
                       className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
                       onClick={exportAllPagesCsv}
@@ -261,6 +297,16 @@ export default function Page() {
                   >
                     {autoExporting ? 'Exporting…' : 'Export CSV all results'}
                   </button>
+
+                  {/* (Optional) quick export only current preview */}
+                  {/*<button*/}
+                  {/*    className="rounded-xl border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"*/}
+                  {/*    onClick={exportCsvVisible}*/}
+                  {/*    disabled={!rows.length || autoExporting}*/}
+                  {/*    title="Export only the items currently loaded (up to 100)"*/}
+                  {/*>*/}
+                  {/*  Export CSV (preview)*/}
+                  {/*</button>*/}
                 </div>
               </div>
 
@@ -295,6 +341,12 @@ export default function Page() {
                   </tbody>
                 </table>
               </div>
+
+              {rows.length >= PREVIEW_LIMIT && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Showing the first {PREVIEW_LIMIT} items for performance. Use “Export CSV all results” for the full list.
+                  </p>
+              )}
             </div>
           </div>
 
